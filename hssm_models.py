@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import hssm
 import arviz as az
-from utils import get_fitted_participants, write_summary_to_sql, as_trialwise
+from hssm_utils import get_fitted_participants, write_summary_to_sql, as_trialwise
 
 jax.config.update('jax_platform_name', 'cpu')
 hssm.set_floatX("float32")
@@ -93,31 +93,61 @@ def run_sequential_fits(df_hssm, participant_column, db_path, predictor='ab_nomi
             except Exception as e:
                 print(f"❌ Failed participant {pid}: {e}")
 
-def simulate_participant_ddm(participant_id, df, model='pure', size=300, bonus_prob=0.5):
+def simulate_participant_ddm(participant_id,df,model='pure',X=None):
+
     subset = df[df['participant_id'] == participant_id]
+
     z = subset[subset['param'] == 'z']['mean'].values[0]
     t = subset[subset['param'] == 't']['mean'].values[0]
-    X = np.random.binomial(1, bonus_prob, size) if model in ['v', 'th'] else np.zeros(size)
 
+    # --- Handle trial design ---
+    if model in ['v', 'th']:
+        if X is None:
+            raise ValueError("X must be provided for 'v' and 'th' models")
+        X = np.asarray(X)
+        size = len(X)
+    else:
+        size = len(X) if X is not None else None
+
+    # --- Assign v and a ---
     if model == 'pure':
         v = subset[subset['param'] == 'v']['mean'].values[0]
         a = subset[subset['param'] == 'a']['mean'].values[0]
+
     elif model == 'v':
         v_int = subset[subset['param'] == 'v_Intercept']['mean'].values[0]
         v_x = subset[subset['param'] == 'v_X']['mean'].values[0]
         v = v_int + X * v_x
         a = subset[subset['param'] == 'a']['mean'].values[0]
+
     elif model == 'th':
         v = subset[subset['param'] == 'v_Intercept']['mean'].values[0]
         a_int = subset[subset['param'] == 'a_Intercept']['mean'].values[0]
         a_x = subset[subset['param'] == 'a_X']['mean'].values[0]
         a = a_int + X * a_x
+
     else:
         raise ValueError("model must be one of 'pure', 'v', 'th'")
 
-    true_values = np.column_stack([as_trialwise(v, size), as_trialwise(a, size), np.full(size, z), np.full(size, t)])
-    dataset = hssm.simulate_data(model="ddm", theta=true_values, size=1)
-    dataset["participant_id"], dataset["X"] = str(participant_id), X
+    # --- Normalize to trial-wise ---
+    v_vec = as_trialwise(v, len(X))
+    a_vec = as_trialwise(a, len(X))
+    z_vec = np.full(len(X), z)
+    t_vec = np.full(len(X), t)
+
+    true_values = np.column_stack([v_vec, a_vec, z_vec, t_vec])
+    assert true_values.shape == (len(X), 4)
+
+    # --- Simulate ---
+    dataset = hssm.simulate_data(
+        model="ddm",
+        theta=true_values,
+        size=1,
+    )
+
+    dataset["participant_id"] = str(participant_id)
+    dataset["X"] = X
+
     return dataset
 
 def get_fitted_parameters(df, participant_id, model):
