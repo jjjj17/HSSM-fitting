@@ -21,9 +21,12 @@ def write_to_sql(df, db_name, table_name):
 
 def write_summary_to_sql(df, db_path, table_name):
     df = df.copy()
+    print(df)
     df["timestamp"] = datetime.now().isoformat()
     with sqlite3.connect(db_path) as conn:
+        print("writing")
         df.to_sql(table_name, conn, if_exists="append", index=False)
+        conn.commit()
 
 def get_fitted_participants(db_path, table_name):
     with sqlite3.connect(db_path) as conn:
